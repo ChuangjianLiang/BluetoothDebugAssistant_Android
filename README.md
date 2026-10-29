@@ -76,6 +76,8 @@ chmod +x gradlew
 
 当前版本为 1.1.1。正式安装包通过 [GitHub Releases](https://github.com/ChuangjianLiang/BluetoothDebugAssistant_Android/releases) 分发，APK 不纳入源码提交。
 
+首次 GitHub 正式发布改用专用发布密钥。此前使用 Android Debug 签名的安装包无法直接覆盖升级到此正式版，需要先卸载旧版；卸载会删除 App 内保存的项目，请先记录重要配置。后续正式版本将沿用新的发布签名。
+
 如需自行构建签名正式版，请先生成并妥善保管自己的签名密钥，在项目根目录创建 `keystore.properties`：
 
 ```properties
