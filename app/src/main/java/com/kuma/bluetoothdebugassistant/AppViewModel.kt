@@ -115,12 +115,9 @@ class AppViewModel(
         projectRepository.delete(id)
     }
 
-    fun updateLayout(id: String, layout: ProjectLayout, showConfirmation: Boolean = false) {
+    fun updateLayout(id: String, layout: ProjectLayout) {
         viewModelScope.launch {
             runCatching { projectRepository.updateLayout(id, layout) }
-                .onSuccess {
-                    if (showConfirmation) _messages.emit("布局已保存")
-                }
                 .onFailure { _messages.emit(it.userMessage("布局保存失败")) }
         }
     }
@@ -212,9 +209,10 @@ class AppViewModel(
                 return false
             }
 
-            val preferGatt = transport == BluetoothTransport.LE ||
+            val knownGattDevice = transport == BluetoothTransport.LE ||
                 device?.gattProfile != null ||
-                NUS_SERVICE_UUID in device?.serviceUuids.orEmpty() ||
+                NUS_SERVICE_UUID in device?.serviceUuids.orEmpty()
+            val preferGatt = knownGattDevice ||
                 (transport != BluetoothTransport.CLASSIC &&
                     SPP_UUID !in device?.serviceUuids.orEmpty())
 
@@ -223,7 +221,7 @@ class AppViewModel(
                 return@launch
             }
 
-            if (transport == BluetoothTransport.LE) {
+            if (knownGattDevice) {
                 onComplete(result)
                 return@launch
             }

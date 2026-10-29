@@ -22,8 +22,8 @@ android {
         applicationId = "com.kuma.bluetoothdebugassistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.1.1"
+        versionCode = 7
+        versionName = "1.1.5"
         resValue(
             "bool",
             "use_fake_bluetooth",

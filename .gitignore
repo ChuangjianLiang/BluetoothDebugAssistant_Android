@@ -8,8 +8,8 @@ captures/
 .externalNativeBuild/
 .cxx/
 app/build/
+.kotlin/
 *.apk
 *.aab
 *.jks
 *.keystore
-.kotlin/

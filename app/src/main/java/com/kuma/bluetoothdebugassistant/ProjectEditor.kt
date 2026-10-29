@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,7 +31,6 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -39,14 +39,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -81,6 +79,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kuma.bluetoothdebugassistant.bluetooth.BluetoothDeviceModel
 import com.kuma.bluetoothdebugassistant.bluetooth.BluetoothStatus
@@ -195,13 +195,16 @@ fun ProjectEditorScreen(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Button(
-                        onClick = { layout?.let { viewModel.updateLayout(id, it, true) } },
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
                         shape = RoundedCornerShape(12.dp),
                     ) {
-                        Icon(Icons.Outlined.Save, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("保存")
+                        Text(
+                            "自动保存",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            color = PrimaryBlue,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             }
@@ -324,7 +327,7 @@ fun ProjectEditorScreen(
         ComponentPropertiesSheet(
             component = selected,
             onDismiss = { showProperties = false },
-            onSave = { changed ->
+            onChange = { changed ->
                 updateLayout { current ->
                     current.copy(
                         items = current.items.map {
@@ -332,7 +335,6 @@ fun ProjectEditorScreen(
                         },
                     )
                 }
-                showProperties = false
             },
         )
     }
@@ -823,7 +825,7 @@ private fun LayoutComponent(
         modifier = modifier.pointerInput(component.id, scale, gridEnabled, gridSize, selected) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
-                val resizeHandlePixels = 22f * density
+                val resizeHandlePixels = 14f * density
                 if (
                     selected &&
                     down.position.x >= size.width - resizeHandlePixels &&
@@ -876,8 +878,8 @@ private fun LayoutComponent(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .size(22.dp)
-                    .background(PrimaryBlue, RoundedCornerShape(topStart = 6.dp))
+                    .size(14.dp)
+                    .background(PrimaryBlue, RoundedCornerShape(topStart = 4.dp))
                     .pointerInput(component.id, scale, gridEnabled, gridSize) {
                         awaitEachGesture {
                             val down = awaitFirstDown()
@@ -1156,35 +1158,67 @@ private fun RuntimeHandle(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ComponentPropertiesSheet(
     component: ProjectComponent,
     onDismiss: () -> Unit,
-    onSave: (ProjectComponent) -> Unit,
+    onChange: (ProjectComponent) -> Unit,
 ) {
     var draft by remember(component.id) { mutableStateOf(component) }
     var colorText by remember(component.id) { mutableStateOf(component.color) }
     var colorExpanded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var initialized by remember(component.id) { mutableStateOf(false) }
 
-    ModalBottomSheet(
+    LaunchedEffect(draft, colorText) {
+        if (!initialized) {
+            initialized = true
+            return@LaunchedEffect
+        }
+        val normalizedColor = colorText.trim().uppercase()
+        if (!normalizedColor.matches(Regex("^#[0-9A-F]{6}([0-9A-F]{2})?$"))) {
+            error = "颜色格式应为 #RRGGBB 或 #AARRGGBB"
+            return@LaunchedEffect
+        }
+        if (draft.commandMode == CommandMode.HEX && draft.command.isNotBlank()) {
+            val hexError = runCatching {
+                CommandEncoder.parseHex(draft.command)
+            }.exceptionOrNull()
+            if (hexError != null) {
+                error = hexError.message
+                return@LaunchedEffect
+            }
+        }
+        error = null
+        onChange(draft.copy(color = normalizedColor).constrained())
+    }
+
+    Dialog(
         onDismissRequest = onDismiss,
-        containerColor = AppBackground,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
-        Column(
+        Surface(
             modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .fillMaxSize(),
+            color = AppBackground,
         ) {
-            Surface(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                color = CardBackground,
-                shape = RoundedCornerShape(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding(),
+                    color = CardBackground,
+                    shape = RoundedCornerShape(
+                        bottomStart = 16.dp,
+                        bottomEnd = 16.dp,
+                    ),
+                ) {
                 Row(
                     modifier = Modifier.padding(14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1202,126 +1236,39 @@ private fun ComponentPropertiesSheet(
                         )
                     }
                     Spacer(Modifier.width(12.dp))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(
                             "${component.type.label}属性",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            "调整布局、外观与发送行为",
+                            "全屏编辑 · 修改后自动保存",
                             color = SecondaryColor,
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    TextButton(onClick = onDismiss) { Text("完成") }
                 }
             }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+            Text("名称与命令", fontWeight = FontWeight.Bold)
             OutlinedTextField(
                 value = draft.name,
                 onValueChange = { draft = draft.copy(name = it) },
                 label = { Text("名称") },
                 modifier = Modifier.fillMaxWidth(),
             )
-            Text("布局", fontWeight = FontWeight.Bold)
-            PropertyNumberRow(
-                firstLabel = "X",
-                firstValue = draft.x,
-                onFirst = { draft = draft.copy(x = it) },
-                secondLabel = "Y",
-                secondValue = draft.y,
-                onSecond = { draft = draft.copy(y = it) },
-            )
-            PropertyNumberRow(
-                firstLabel = "宽度",
-                firstValue = draft.width,
-                onFirst = { draft = draft.copy(width = it) },
-                secondLabel = "高度",
-                secondValue = draft.height,
-                onSecond = { draft = draft.copy(height = it) },
-            )
-            PropertyNumberRow(
-                firstLabel = "圆角",
-                firstValue = draft.cornerRadius,
-                onFirst = { draft = draft.copy(cornerRadius = it) },
-                secondLabel = "字号",
-                secondValue = draft.fontSize,
-                onSecond = { draft = draft.copy(fontSize = it) },
-            )
-            Text("外观", fontWeight = FontWeight.Bold)
-            Box {
-                OutlinedButton(
-                    onClick = { colorExpanded = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .background(parseColor(colorText), CircleShape)
-                            .border(1.dp, BorderColor, CircleShape),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        DEFAULT_COMPONENT_COLORS
-                            .firstOrNull { it.hex.equals(colorText, ignoreCase = true) }
-                            ?.name
-                            ?: "自定义颜色",
-                        modifier = Modifier.weight(1f),
-                        textAlign = TextAlign.Start,
-                    )
-                    Text(colorText.uppercase(), color = SecondaryColor)
-                    Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "选择颜色")
-                }
-                DropdownMenu(
-                    expanded = colorExpanded,
-                    onDismissRequest = { colorExpanded = false },
-                ) {
-                    DEFAULT_COMPONENT_COLORS.forEach { option ->
-                        DropdownMenuItem(
-                            leadingIcon = {
-                                Box(
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .background(parseColor(option.hex), CircleShape),
-                                )
-                            },
-                            text = {
-                                Column {
-                                    Text(option.name)
-                                    Text(
-                                        option.hex,
-                                        color = SecondaryColor,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                }
-                            },
-                            onClick = {
-                                colorText = option.hex
-                                colorExpanded = false
-                            },
-                        )
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = colorText,
-                    onValueChange = { colorText = it },
-                    label = { Text("颜色 HEX") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = draft.zIndex.toString(),
-                    onValueChange = { it.toIntOrNull()?.let { value -> draft = draft.copy(zIndex = value) } },
-                    label = { Text("层级") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                )
-            }
 
             if (component.type != ComponentType.TEXT) {
-                HorizontalDivider()
-                Text("命令", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CommandMode.entries.forEach { commandMode ->
                         FilterChip(
@@ -1419,32 +1366,109 @@ private fun ComponentPropertiesSheet(
                     draft.handleReturnToCenter,
                 ) { draft = draft.copy(handleReturnToCenter = it) }
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                TextButton(onClick = onDismiss) { Text("取消") }
-                Button(
-                    onClick = {
-                        val normalizedColor = colorText.trim().uppercase()
-                        if (!normalizedColor.matches(Regex("^#[0-9A-F]{6}([0-9A-F]{2})?$"))) {
-                            error = "颜色格式应为 #RRGGBB 或 #AARRGGBB"
-                            return@Button
-                        }
-                        if (draft.commandMode == CommandMode.HEX && draft.command.isNotBlank()) {
-                            val hexError = runCatching {
-                                CommandEncoder.parseHex(draft.command)
-                            }.exceptionOrNull()
-                            if (hexError != null) {
-                                error = hexError.message
-                                return@Button
-                            }
-                        }
-                        onSave(draft.copy(color = normalizedColor))
-                    },
-                ) { Text("应用") }
+            HorizontalDivider()
+            Text("布局与外观", fontWeight = FontWeight.Bold)
+            PropertyNumberRow(
+                firstLabel = "X",
+                firstValue = draft.x,
+                onFirst = { draft = draft.copy(x = it) },
+                secondLabel = "Y",
+                secondValue = draft.y,
+                onSecond = { draft = draft.copy(y = it) },
+            )
+            PropertyNumberRow(
+                firstLabel = "宽度",
+                firstValue = draft.width,
+                onFirst = { draft = draft.copy(width = it) },
+                secondLabel = "高度",
+                secondValue = draft.height,
+                onSecond = { draft = draft.copy(height = it) },
+            )
+            PropertyNumberRow(
+                firstLabel = "圆角",
+                firstValue = draft.cornerRadius,
+                onFirst = { draft = draft.copy(cornerRadius = it) },
+                secondLabel = "字号",
+                secondValue = draft.fontSize,
+                onSecond = { draft = draft.copy(fontSize = it) },
+            )
+            Box {
+                OutlinedButton(
+                    onClick = { colorExpanded = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(parseColor(colorText), CircleShape)
+                            .border(1.dp, BorderColor, CircleShape),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        DEFAULT_COMPONENT_COLORS
+                            .firstOrNull { it.hex.equals(colorText, ignoreCase = true) }
+                            ?.name
+                            ?: "自定义颜色",
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Start,
+                    )
+                    Text(colorText.uppercase(), color = SecondaryColor)
+                    Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "选择颜色")
+                }
+                DropdownMenu(
+                    expanded = colorExpanded,
+                    onDismissRequest = { colorExpanded = false },
+                ) {
+                    DEFAULT_COMPONENT_COLORS.forEach { option ->
+                        DropdownMenuItem(
+                            leadingIcon = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .background(parseColor(option.hex), CircleShape),
+                                )
+                            },
+                            text = {
+                                Column {
+                                    Text(option.name)
+                                    Text(
+                                        option.hex,
+                                        color = SecondaryColor,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                colorText = option.hex
+                                colorExpanded = false
+                            },
+                        )
+                    }
+                }
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = colorText,
+                    onValueChange = { colorText = it },
+                    label = { Text("颜色 HEX") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = draft.zIndex.toString(),
+                    onValueChange = {
+                        it.toIntOrNull()?.let { value ->
+                            draft = draft.copy(zIndex = value)
+                        }
+                    },
+                    label = { Text("层级") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }
         }
     }
 }

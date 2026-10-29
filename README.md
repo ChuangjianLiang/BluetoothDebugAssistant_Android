@@ -44,78 +44,37 @@
 
 ## 构建
 
-准备 JDK 17 和 Android SDK API 36。`minSdk 26`，`compileSdk/targetSdk 36`。将 `JAVA_HOME` 指向本机 JDK 安装目录；使用 Android Studio 打开项目并配置 SDK，或设置 `ANDROID_HOME` 指向本机 Android SDK。也可以在项目根目录创建 `local.properties`，设置 `sdk.dir` 为本机 SDK 路径（Windows 示例：`sdk.dir=C\:/Users/YourName/AppData/Local/Android/Sdk`，使用 `/` 并转义盘符冒号）。此文件已被 Git 忽略，不应上传。
-
-先克隆项目并进入项目目录：
-
-```bash
-git clone https://github.com/ChuangjianLiang/BluetoothDebugAssistant_Android.git
-cd BluetoothDebugAssistant_Android
-```
-
-Windows PowerShell：
-
-```powershell
-.\gradlew.bat assembleDebug
-# 可选：运行单元测试和静态检查
-.\gradlew.bat testDebugUnitTest lintRelease
-```
+要求 JDK 17 和 Android SDK API 36。`minSdk 26`，`compileSdk/targetSdk 36`。项目使用 Gradle Wrapper，不依赖 Ubuntu 或任何本机绝对路径。
 
 Linux / macOS：
 
 ```bash
-chmod +x gradlew
-./gradlew assembleDebug
-# 可选：运行单元测试和静态检查
-./gradlew testDebugUnitTest lintRelease
+./gradlew testDebugUnitTest lintRelease assembleRelease
 ```
 
-调试安装包输出至 `app/build/outputs/apk/debug/app-debug.apk`。首次构建需要联网下载 Gradle 和依赖。
+Windows：
 
-### 正式版签名与发布
-
-当前版本为 1.1.1。正式安装包通过 [GitHub Releases](https://github.com/ChuangjianLiang/BluetoothDebugAssistant_Android/releases) 分发，APK 不纳入源码提交。
-
-首次 GitHub 正式发布改用专用发布密钥。此前使用 Android Debug 签名的安装包无法直接覆盖升级到此正式版，需要先卸载旧版；卸载会删除 App 内保存的项目，请先记录重要配置。后续正式版本将沿用新的发布签名。
-
-如需自行构建签名正式版，请先生成并妥善保管自己的签名密钥，在项目根目录创建 `keystore.properties`：
-
-```properties
-storeFile=/path/to/your/release.jks
-storePassword=YOUR_STORE_PASSWORD
-keyAlias=YOUR_KEY_ALIAS
-keyPassword=YOUR_KEY_PASSWORD
+```bat
+gradlew.bat testDebugUnitTest lintRelease assembleRelease
 ```
 
-将以上占位值替换为自己的配置，Windows 密钥路径同样使用 `/` 并转义盘符冒号，例如 `storeFile=C\:/keys/release.jks`。然后运行：
+Android SDK 路径由 Android Studio 或本机未提交的 `local.properties` 提供。普通开发者可以直接构建并安装 Debug APK；如需签名 Release，请复制 `keystore.properties.example` 为 `keystore.properties`，填写自己的相对或绝对密钥路径。密钥及密码文件均已被 `.gitignore` 排除。
 
-```powershell
-# Windows PowerShell
-.\gradlew.bat assembleRelease
-```
-
-```bash
-# Linux / macOS
-./gradlew assembleRelease
-```
-
-已配置签名时，输出文件为 `app/build/outputs/apk/release/app-release.apk`；未配置签名时生成未签名 APK，不能作为可直接安装的正式包分发。
-
-维护者发布时，在 GitHub 仓库中选择 **Releases → Create a new release**，创建与源码提交对应的版本标签（如 `v1.1.1`），填写更新说明，并将已验证的签名 APK 以 `BluetoothDebugAssistant.apk` 的名称添加到附件后发布。
+当前版本为 1.1.5。正式安装包通过 [GitHub Releases](https://github.com/ChuangjianLiang/BluetoothDebugAssistant_Android/releases) 分发，APK 不纳入源码提交。请在对应版本的 **Assets** 中下载 `BluetoothDebugAssistant.apk`；`Source code` 压缩包是源码，不是安装包。
 
 Fake Bluetooth 控制器仅用于自动化测试和本地开发，不再发布单独的演示 APK。
 
-`keystore.properties`、`*.jks` 和 `*.keystore` 已被 Git 忽略，不应上传到 GitHub 或 Release 附件。请安全备份签名密钥和配置；后续版本必须沿用相同签名且满足版本号要求，才能覆盖安装。自行签名的 APK 通常不能直接覆盖官方签名版本。
+项目维护者必须长期安全备份正式签名密钥；丢失密钥后将无法用新版本覆盖安装已有 App。
 
 ## 手机安装
 
 ### 方式 1（推荐）
 
-打开 [GitHub Releases 下载页](https://github.com/ChuangjianLiang/BluetoothDebugAssistant_Android/releases)，选择所需版本，在 **Assets** 中下载 `BluetoothDebugAssistant.apk` 到手机并点击安装。`Source code` 压缩包是源码，不是安装包。
+打开 [GitHub Releases 下载页](https://github.com/ChuangjianLiang/BluetoothDebugAssistant_Android/releases)，选择所需版本，在 **Assets** 中下载 `BluetoothDebugAssistant.apk` 到手机并点击安装。
 
 ### 方式 2
 
-先从上述 Releases 页面下载 `BluetoothDebugAssistant.apk`，并在下载目录打开终端。在手机开发者选项中开启“USB 调试”，连接数据线并在手机上允许此电脑：
+在手机开发者选项中开启“USB 调试”，连接数据线并在手机上允许此电脑：
 
 ```bash
 adb devices -l
@@ -137,14 +96,18 @@ adb shell monkey -p com.kuma.bluetoothdebugassistant 1
 2. 在“设备”页授权并扫描，按名称或 MAC 查找目标。
 3. 点击设备后，纯 LE 设备直接使用 GATT；Dual 设备优先尝试 GATT，失败后自动回退 Classic；Classic 设备使用 SDP/RFCOMM。
 4. GATT 会优先使用 Nordic UART Service（服务 `6e400001-...`、写 `6e400002-...`、通知 `6e400003-...`），其他设备则自动选择首个可写特征和可通知特征。BLE 通常不需要先在系统中配对。
-5. Classic 模式会优先尝试缓存及标准 SPP UUID，必要时自动执行 SDP 搜索，不需要用户手动选择 UUID。
+5. Classic 模式会优先尝试缓存及标准 SPP UUID，必要时自动执行 SDP 搜索。若设备使用特殊服务或自动识别不正确，可在收发页的下拉列表中手动选择 UUID、刷新列表并切换连接。
 6. 使用 UTF-8 或 HEX（例如 `AA 55 0D 0A`、`0xAA 0x55`）收发数据。
+
+NUS 扫描阶段通常只会显示服务 UUID `6e400001-...`，这是正常现象。App 建立 GATT 连接并发现服务后，会自动向 `6e400002-...` 写入并订阅 `6e400003-...` 通知；`003` 是接收特征，不是 RFCOMM 连接 UUID。已识别为 NUS 的设备不会再错误回退到 Classic。
+
+Android BLE 偶发返回 GATT 状态码 133 时，App 会先完整释放旧 GATT、短暂退避并最多自动重试 3 次。若仍失败，请确认设备没有被其他手机或调试工具占用，并尝试关闭再开启手机蓝牙。
 
 目标端未启动 SPP 服务时，SDP 可能没有标准 UUID；先启动目标端监听，再刷新 UUID。BLE 连接失败通常表示设备未广播、GATT 服务未启动或没有可写特征；Classic 连接被拒绝通常表示 UUID 不匹配、服务未监听或配对失效。
 
 ## 支持自定义项目
 
-“项目”页支持新增、重命名、复制、编辑、删除及绑定设备。点击项目会自动连接绑定设备并进入全屏运行模式；点击卡片右侧铅笔进入组件编辑。编辑模式不会发送命令，运行模式不会拖动控件。命令可选择 UTF-8/HEX，UTF-8 可自动追加换行，也可启用发送前确认或按钮长按重复。
+“项目”页支持新增、重命名、复制、编辑、删除及绑定设备。点击项目会自动连接绑定设备并进入全屏运行模式；点击卡片右侧铅笔进入组件编辑。组件属性使用全屏页面编辑，每次有效修改都会自动保存；名称与命令集中在上方，布局、尺寸和颜色集中在下方。编辑模式不会发送命令，运行模式不会拖动控件。命令可选择 UTF-8/HEX，UTF-8 可自动追加换行，也可启用发送前确认或按钮长按重复。
 
 ## 支持作者
 

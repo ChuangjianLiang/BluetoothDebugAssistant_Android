@@ -140,8 +140,15 @@ fun filterDevices(
     }
 }
 
-fun rfcommConnectionCandidates(discovered: List<UUID>): List<UUID> =
-    (discovered + SPP_UUID).distinct()
+fun rfcommConnectionCandidates(discovered: List<UUID>): List<UUID> {
+    val bluetoothBaseSuffix = "-0000-1000-8000-00805f9b34fb"
+    val customServices = discovered.filter { uuid ->
+        uuid != NUS_SERVICE_UUID &&
+            (uuid == SPP_UUID ||
+                !uuid.toString().endsWith(bluetoothBaseSuffix, ignoreCase = true))
+    }
+    return (listOf(SPP_UUID) + customServices).distinct()
+}
 
 fun selectBleGattProfile(services: List<BleGattServiceModel>): BleGattProfile? {
     val nus = services.firstOrNull { it.uuid == NUS_SERVICE_UUID }

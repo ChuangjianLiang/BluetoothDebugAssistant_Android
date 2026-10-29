@@ -53,11 +53,22 @@ class BluetoothControllerTest {
     }
 
     @Test
-    fun `discovered UUIDs are tried before the SPP compatibility fallback`() {
+    fun `SPP is preferred before custom RFCOMM services`() {
         val custom = UUID.fromString("12345678-1234-5678-1234-567812345678")
 
-        assertEquals(listOf(custom, SPP_UUID), rfcommConnectionCandidates(listOf(custom)))
+        assertEquals(listOf(SPP_UUID, custom), rfcommConnectionCandidates(listOf(custom)))
         assertEquals(listOf(SPP_UUID), rfcommConnectionCandidates(listOf(SPP_UUID)))
+    }
+
+    @Test
+    fun `non serial Bluetooth SIG profiles are not RFCOMM candidates`() {
+        val headset = UUID.fromString("00001108-0000-1000-8000-00805f9b34fb")
+        val audioSink = UUID.fromString("0000110b-0000-1000-8000-00805f9b34fb")
+
+        assertEquals(
+            listOf(SPP_UUID),
+            rfcommConnectionCandidates(listOf(headset, audioSink, NUS_SERVICE_UUID)),
+        )
     }
 
     @Test

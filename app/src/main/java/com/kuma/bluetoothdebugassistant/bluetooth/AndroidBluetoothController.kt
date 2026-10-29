@@ -50,6 +50,9 @@ private const val GATT_CONNECTION_TIMEOUT_MS = 10_000L
 private const val CLASSIC_CONNECTION_TIMEOUT_MS = 8_000L
 private const val GATT_WRITE_TIMEOUT_MS = 8_000L
 private const val DEFAULT_GATT_PAYLOAD_SIZE = 20
+private const val GATT_MAX_CONNECT_ATTEMPTS = 3
+private const val GATT_INITIAL_SETTLE_DELAY_MS = 350L
+private const val GATT_RETRY_BASE_DELAY_MS = 700L
 
 class AndroidBluetoothController(
     context: Context,
@@ -555,36 +558,51 @@ class AndroidBluetoothController(
                 adapter?.bluetoothLeScanner?.stopScan(bleScanCallback)
                 bleScanning = false
             }
-            _status.value = BluetoothStatus.Connecting(
-                address = address,
-                mode = BluetoothConnectionMode.BLE_GATT,
-            )
-            updateConnection(address, DeviceConnectionStatus.CONNECTING)
-            activeAddress = address
-            activeMode = BluetoothConnectionMode.BLE_GATT
-            val result = CompletableDeferred<BluetoothStatus>()
-            pendingGattConnection = result
-            try {
-                val device = adapter?.getRemoteDevice(address)
-                    ?: error("蓝牙适配器不可用")
-                bluetoothGatt = device.connectGatt(
-                    appContext,
-                    false,
-                    gattCallback,
-                    BluetoothDevice.TRANSPORT_LE,
+            delay(GATT_INITIAL_SETTLE_DELAY_MS)
+            val device = adapter?.getRemoteDevice(address)
+                ?: run {
+                    fail(BluetoothError.ConnectionFailed("蓝牙适配器不可用"))
+                    return@withLock
+                }
+
+            for (attempt in 1..GATT_MAX_CONNECT_ATTEMPTS) {
+                _status.value = BluetoothStatus.Connecting(
+                    address = address,
+                    mode = BluetoothConnectionMode.BLE_GATT,
                 )
-                val completed = withTimeoutOrNull(GATT_CONNECTION_TIMEOUT_MS) {
-                    result.await()
-                }
-                if (completed !is BluetoothStatus.Connected) {
-                    if (completed == null) {
-                        finishGattFailure(bluetoothGatt, "GATT 连接或服务发现超时")
+                updateConnection(address, DeviceConnectionStatus.CONNECTING)
+                activeAddress = address
+                activeMode = BluetoothConnectionMode.BLE_GATT
+                val result = CompletableDeferred<BluetoothStatus>()
+                pendingGattConnection = result
+                val completed = try {
+                    bluetoothGatt = device.connectGatt(
+                        appContext,
+                        false,
+                        gattCallback,
+                        BluetoothDevice.TRANSPORT_LE,
+                    )
+                    withTimeoutOrNull(GATT_CONNECTION_TIMEOUT_MS) {
+                        result.await()
+                    } ?: run {
+                        finishGattFailure(
+                            bluetoothGatt,
+                            "GATT 连接或服务发现超时（第 $attempt 次）",
+                        )
+                        _status.value
                     }
+                } catch (error: Exception) {
+                    finishGattFailure(bluetoothGatt, error.message ?: "未知错误")
+                    _status.value
+                } finally {
+                    pendingGattConnection = null
                 }
-            } catch (error: Exception) {
-                finishGattFailure(bluetoothGatt, error.message ?: "未知错误")
-            } finally {
-                pendingGattConnection = null
+
+                if (completed is BluetoothStatus.Connected) return@withLock
+                if (attempt == GATT_MAX_CONNECT_ATTEMPTS || !completed.isRetryableGattFailure()) {
+                    return@withLock
+                }
+                delay(GATT_RETRY_BASE_DELAY_MS * attempt)
             }
         }
     }
@@ -604,6 +622,14 @@ class AndroidBluetoothController(
         val completed = CompletableDeferred<Result<Unit>>()
         writeQueue.send(WriteRequest(bytes.copyOf(), completed))
         completed.await().getOrThrow()
+    }
+
+    private fun BluetoothStatus.isRetryableGattFailure(): Boolean {
+        val detail = ((this as? BluetoothStatus.Failed)?.error
+            as? BluetoothError.ConnectionFailed)?.detail.orEmpty()
+        return "状态码 133" in detail ||
+            "状态码 8" in detail ||
+            "超时" in detail
     }
 
     private fun startReader(connectedSocket: BluetoothSocket, address: String) {

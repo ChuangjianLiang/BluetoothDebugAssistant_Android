@@ -1,5 +1,6 @@
 package com.kuma.bluetoothdebugassistant
 
+import android.content.res.Configuration
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -18,7 +19,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bluetooth
@@ -27,6 +30,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
@@ -58,6 +62,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +80,11 @@ import com.kuma.bluetoothdebugassistant.bluetooth.BluetoothTransport
 import com.kuma.bluetoothdebugassistant.bluetooth.BondStatus
 import com.kuma.bluetoothdebugassistant.bluetooth.DeviceConnectionStatus
 import com.kuma.bluetoothdebugassistant.bluetooth.FakeBluetoothController
+import com.kuma.bluetoothdebugassistant.bluetooth.NUS_NOTIFY_UUID
+import com.kuma.bluetoothdebugassistant.bluetooth.NUS_SERVICE_UUID
+import com.kuma.bluetoothdebugassistant.bluetooth.NUS_WRITE_UUID
+import com.kuma.bluetoothdebugassistant.bluetooth.SPP_UUID
+import com.kuma.bluetoothdebugassistant.bluetooth.rfcommConnectionCandidates
 import com.kuma.bluetoothdebugassistant.project.ProjectEntity
 import com.kuma.bluetoothdebugassistant.ui.theme.AppBackground
 import com.kuma.bluetoothdebugassistant.ui.theme.CardBackground
@@ -84,6 +94,7 @@ import com.kuma.bluetoothdebugassistant.ui.theme.TitleColor
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 
 private const val DETAIL_ROUTE = "device"
 private const val PROJECT_RUN_ROUTE = "project-run"
@@ -375,14 +386,17 @@ private fun DeviceDetailScreen(
 ) {
     val devices by viewModel.controller.devices.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
+    val selectedUuids by viewModel.selectedUuids.collectAsStateWithLifecycle()
     val consoleEntries by viewModel.consoleEntries.collectAsStateWithLifecycle()
     val device = devices.firstOrNull { it.address == address }
     var sendValue by remember { mutableStateOf("") }
-    var displayMode by remember { mutableStateOf(ConsoleDisplayMode.HEX) }
+    var displayMode by remember { mutableStateOf(ConsoleDisplayMode.UTF8) }
     var inputError by remember { mutableStateOf<String?>(null) }
+    var uuidExpanded by remember(address) { mutableStateOf(false) }
     var connectionDialog by remember(address) { mutableStateOf<ConnectionDialog?>(null) }
     var pairingStarted by remember(address) { mutableStateOf(false) }
     var autoConnectionStarted by remember(address) { mutableStateOf(false) }
+    var manualDisconnectRequested by remember(address) { mutableStateOf(false) }
     var logPaused by remember { mutableStateOf(false) }
     var pausedEntries by remember { mutableStateOf<List<ConsoleEntry>>(emptyList()) }
 
@@ -395,23 +409,61 @@ private fun DeviceDetailScreen(
     }
 
     val isConnected = device.connectionStatus == DeviceConnectionStatus.CONNECTED
+    val selectedUuid = selectedUuids[address] ?: SPP_UUID
+    val uuidChoices = rfcommConnectionCandidates(device.serviceUuids)
+    val hasNordicUart = NUS_SERVICE_UUID in device.serviceUuids ||
+        device.gattProfile?.serviceUuid == NUS_SERVICE_UUID
     val connectedStatus = (status as? BluetoothStatus.Connected)
         ?.takeIf { it.address == address }
     val isBusy = status is BluetoothStatus.Connecting ||
         status is BluetoothStatus.RefreshingUuids ||
         status is BluetoothStatus.Disconnecting
     val visibleEntries = if (logPaused) pausedEntries else consoleEntries
+    val isLandscape = LocalConfiguration.current.orientation ==
+        Configuration.ORIENTATION_LANDSCAPE
 
     fun discoverAndConnect() {
         viewModel.discoverAndConnect(address) { result ->
-            connectionDialog = when (result) {
-                is BluetoothStatus.Connected -> ConnectionDialog.Success
-                is BluetoothStatus.Failed -> ConnectionDialog.Failure(
-                    "已自动尝试 BLE GATT 和 Classic SPP，但连接失败：${result.error.message}",
-                )
-                else -> ConnectionDialog.Failure(
-                    "自动连接未完成，请检查权限，以及目标设备的 GATT 或 SPP 服务。",
-                )
+            if (!manualDisconnectRequested) {
+                connectionDialog = when (result) {
+                    is BluetoothStatus.Connected -> ConnectionDialog.Success
+                    is BluetoothStatus.Failed -> ConnectionDialog.Failure(
+                        if (hasNordicUart) {
+                            "已识别 Nordic UART 服务，但 BLE GATT 连接失败：" +
+                                "${result.error.message}。请确认设备未被其他手机占用，" +
+                                "且 002 支持写入、003 支持通知。"
+                        } else {
+                            "已自动尝试 BLE GATT 和 Classic SPP，但连接失败：" +
+                                "${result.error.message}。可以留在详情页手动选择 Classic UUID。"
+                        },
+                    )
+                    else -> ConnectionDialog.Failure(
+                        "自动连接未完成，请检查权限，以及目标设备的 GATT 或 SPP 服务。",
+                    )
+                }
+            }
+        }
+    }
+
+    fun sendCurrentValue() {
+        if (displayMode == ConsoleDisplayMode.HEX) {
+            viewModel.sendHex(sendValue) { inputError = it }
+        } else {
+            viewModel.sendText(sendValue) { inputError = it }
+        }
+    }
+
+    fun connectSelectedUuid() {
+        manualDisconnectRequested = false
+        autoConnectionStarted = true
+        connectionDialog = null
+        viewModel.connect(address, selectedUuid) { result ->
+            if (!manualDisconnectRequested) {
+                connectionDialog = when (result) {
+                    is BluetoothStatus.Connected -> ConnectionDialog.Success
+                    is BluetoothStatus.Failed -> ConnectionDialog.Failure(result.error.message)
+                    else -> ConnectionDialog.Failure("使用所选 UUID 连接未完成")
+                }
             }
         }
     }
@@ -421,23 +473,26 @@ private fun DeviceDetailScreen(
     }
 
     LaunchedEffect(address, device.bondStatus, isConnected) {
-        if (isConnected) {
-            connectionDialog = ConnectionDialog.Success
-        } else if (
+        if (!isConnected &&
             device.transport == BluetoothTransport.CLASSIC &&
             device.bondStatus == BondStatus.NONE &&
             !pairingStarted
         ) {
             pairingStarted = true
             viewModel.pair(address)
-        } else if (!autoConnectionStarted) {
+        } else if (!isConnected && !autoConnectionStarted && !manualDisconnectRequested) {
             autoConnectionStarted = true
             discoverAndConnect()
         }
     }
 
     LaunchedEffect(status, pairingStarted, autoConnectionStarted) {
-        if (pairingStarted && !autoConnectionStarted && status is BluetoothStatus.Failed) {
+        if (
+            pairingStarted &&
+            !autoConnectionStarted &&
+            !manualDisconnectRequested &&
+            status is BluetoothStatus.Failed
+        ) {
             connectionDialog = ConnectionDialog.Failure(
                 (status as BluetoothStatus.Failed).error.message,
             )
@@ -471,174 +526,136 @@ private fun DeviceDetailScreen(
                 )
             }
             if (isConnected) {
-                TextButton(onClick = viewModel::disconnect) {
+                TextButton(
+                    onClick = {
+                        manualDisconnectRequested = true
+                        connectionDialog = null
+                        viewModel.disconnect()
+                    },
+                ) {
                     Text("断开")
                 }
             }
         }
 
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = CardBackground,
-            shape = RoundedCornerShape(16.dp),
-        ) {
+        val retryConnection = {
+            manualDisconnectRequested = false
+            autoConnectionStarted = true
+            discoverAndConnect()
+        }
+        val clearConsole = {
+            viewModel.clearConsole()
+            pausedEntries = emptyList()
+        }
+
+        if (isLandscape) {
             Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        when {
-                            connectedStatus != null -> "已连接 · ${connectedStatus.mode.label}"
-                            isBusy -> "正在自动识别并连接…"
-                            else -> "未连接"
-                        },
-                        color = if (isConnected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            SecondaryColor
-                        },
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "自动匹配协议和 UUID，无需手动选择",
-                        color = SecondaryColor,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                if (!isConnected) {
-                    Button(
-                        onClick = {
-                            autoConnectionStarted = true
-                            discoverAndConnect()
-                        },
-                        enabled = !isBusy,
-                    ) {
-                        Text("重试")
-                    }
-                }
-            }
-        }
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = CardBackground,
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Column(Modifier.padding(12.dp)) {
-                Text("显示模式", style = MaterialTheme.typography.titleSmall)
-                Row(
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .weight(0.38f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    FilterChip(
-                        modifier = Modifier.weight(1f),
-                        selected = displayMode == ConsoleDisplayMode.HEX,
-                        onClick = { displayMode = ConsoleDisplayMode.HEX },
-                        label = { Text("HEX") },
+                    ConnectionSummaryCard(
+                        connectedStatus = connectedStatus,
+                        isConnected = isConnected,
+                        isBusy = isBusy,
+                        onRetry = retryConnection,
                     )
-                    FilterChip(
-                        modifier = Modifier.weight(1f),
-                        selected = displayMode == ConsoleDisplayMode.UTF8,
-                        onClick = { displayMode = ConsoleDisplayMode.UTF8 },
-                        label = { Text("UTF-8") },
+                    DisplayModeCard(displayMode) { displayMode = it }
+                    ConnectionUuidCard(
+                        connectedStatus = connectedStatus,
+                        transport = device.transport,
+                        hasNordicUart = hasNordicUart,
+                        selectedUuid = selectedUuid,
+                        choices = uuidChoices,
+                        expanded = uuidExpanded,
+                        isBusy = isBusy,
+                        onExpandedChange = { uuidExpanded = it },
+                        onSelect = {
+                            viewModel.selectUuid(address, it)
+                            uuidExpanded = false
+                        },
+                        onRefresh = { viewModel.refreshUuids(address) },
+                        onConnect = ::connectSelectedUuid,
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(0.62f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    RealtimeConsolePanel(
+                        entries = visibleEntries,
+                        mode = displayMode,
+                        paused = logPaused,
+                        onPausedChange = { logPaused = it },
+                        onClear = clearConsole,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                    )
+                    CommandInputRow(
+                        value = sendValue,
+                        mode = displayMode,
+                        error = inputError,
+                        enabled = isConnected,
+                        onValueChange = {
+                            sendValue = it
+                            inputError = null
+                        },
+                        onSend = ::sendCurrentValue,
                     )
                 }
             }
-        }
-
-        RealtimeConsolePanel(
-            entries = visibleEntries,
-            mode = displayMode,
-            paused = logPaused,
-            onPausedChange = { logPaused = it },
-            onClear = {
-                viewModel.clearConsole()
-                pausedEntries = emptyList()
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        )
-
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = CardBackground,
-            shape = RoundedCornerShape(16.dp),
-        ) {
-            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Text(
-                    if (connectedStatus?.mode == BluetoothConnectionMode.BLE_GATT) {
-                        "写入特征 UUID"
-                    } else {
-                        "串口 UUID"
-                    },
-                    color = SecondaryColor,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    connectedStatus?.uuid?.toString() ?: "连接后自动显示",
-                    modifier = Modifier.padding(top = 4.dp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontWeight = FontWeight.Medium,
-                )
-                connectedStatus?.gattProfile?.let { profile ->
-                    Text(
-                        "服务 ${profile.serviceUuid}",
-                        color = SecondaryColor,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
+        } else {
+            ConnectionSummaryCard(
+                connectedStatus = connectedStatus,
+                isConnected = isConnected,
+                isBusy = isBusy,
+                onRetry = retryConnection,
+            )
+            DisplayModeCard(displayMode) { displayMode = it }
+            RealtimeConsolePanel(
+                entries = visibleEntries,
+                mode = displayMode,
+                paused = logPaused,
+                onPausedChange = { logPaused = it },
+                onClear = clearConsole,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            )
+            ConnectionUuidCard(
+                connectedStatus = connectedStatus,
+                transport = device.transport,
+                hasNordicUart = hasNordicUart,
+                selectedUuid = selectedUuid,
+                choices = uuidChoices,
+                expanded = uuidExpanded,
+                isBusy = isBusy,
+                onExpandedChange = { uuidExpanded = it },
+                onSelect = {
+                    viewModel.selectUuid(address, it)
+                    uuidExpanded = false
+                },
+                onRefresh = { viewModel.refreshUuids(address) },
+                onConnect = ::connectSelectedUuid,
+            )
+            CommandInputRow(
                 value = sendValue,
+                mode = displayMode,
+                error = inputError,
+                enabled = isConnected,
                 onValueChange = {
                     sendValue = it
                     inputError = null
                 },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                placeholder = {
-                    Text(
-                        if (displayMode == ConsoleDisplayMode.HEX) {
-                            "输入 HEX，例如 AA 55"
-                        } else {
-                            "输入指令…"
-                        },
-                    )
-                },
-                isError = inputError != null,
-            )
-            Button(
-                onClick = {
-                    if (displayMode == ConsoleDisplayMode.HEX) {
-                        viewModel.sendHex(sendValue) { inputError = it }
-                    } else {
-                        viewModel.sendText(sendValue) { inputError = it }
-                    }
-                },
-                enabled = isConnected && sendValue.isNotBlank(),
-            ) {
-                Text("发送")
-            }
-        }
-        inputError?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall,
+                onSend = ::sendCurrentValue,
             )
         }
     }
@@ -677,6 +694,295 @@ private fun DeviceDetailScreen(
                 null
             },
         )
+    }
+}
+
+@Composable
+private fun ConnectionSummaryCard(
+    connectedStatus: BluetoothStatus.Connected?,
+    isConnected: Boolean,
+    isBusy: Boolean,
+    onRetry: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = CardBackground,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    when {
+                        connectedStatus != null -> "已连接 · ${connectedStatus.mode.label}"
+                        isBusy -> "正在自动识别并连接…"
+                        else -> "未连接"
+                    },
+                    color = if (isConnected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        SecondaryColor
+                    },
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "自动匹配协议和 UUID，无需手动选择",
+                    color = SecondaryColor,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            if (!isConnected) {
+                Button(onClick = onRetry, enabled = !isBusy) {
+                    Text("重试")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DisplayModeCard(
+    mode: ConsoleDisplayMode,
+    onModeChange: (ConsoleDisplayMode) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = CardBackground,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text("显示与发送模式", style = MaterialTheme.typography.titleSmall)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    modifier = Modifier.weight(1f),
+                    selected = mode == ConsoleDisplayMode.UTF8,
+                    onClick = { onModeChange(ConsoleDisplayMode.UTF8) },
+                    label = { Text("UTF-8") },
+                )
+                FilterChip(
+                    modifier = Modifier.weight(1f),
+                    selected = mode == ConsoleDisplayMode.HEX,
+                    onClick = { onModeChange(ConsoleDisplayMode.HEX) },
+                    label = { Text("HEX") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionUuidCard(
+    connectedStatus: BluetoothStatus.Connected?,
+    transport: BluetoothTransport,
+    hasNordicUart: Boolean,
+    selectedUuid: UUID,
+    choices: List<UUID>,
+    expanded: Boolean,
+    isBusy: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelect: (UUID) -> Unit,
+    onRefresh: () -> Unit,
+    onConnect: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = CardBackground,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(
+                if (connectedStatus?.mode == BluetoothConnectionMode.BLE_GATT ||
+                    hasNordicUart
+                ) {
+                    "写入特征 UUID"
+                } else {
+                    "串口 UUID"
+                },
+                color = SecondaryColor,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                connectedStatus?.uuid?.toString()
+                    ?: if (hasNordicUart) NUS_WRITE_UUID.toString() else "连接后自动显示",
+                modifier = Modifier.padding(top = 4.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                fontWeight = FontWeight.Medium,
+            )
+            val gattProfile = connectedStatus?.gattProfile
+            if (gattProfile != null) {
+                Text(
+                    "服务 ${gattProfile.serviceUuid}",
+                    color = SecondaryColor,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                gattProfile.notifyCharacteristicUuid?.let { notifyUuid ->
+                    Text(
+                        "通知 $notifyUuid",
+                        color = SecondaryColor,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else if (hasNordicUart) {
+                Column {
+                    Text(
+                        "NUS 服务 $NUS_SERVICE_UUID",
+                        color = SecondaryColor,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "写入 $NUS_WRITE_UUID",
+                        color = SecondaryColor,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "通知 $NUS_NOTIFY_UUID",
+                        color = SecondaryColor,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (transport != BluetoothTransport.LE) {
+                Text(
+                    "手动选择 Classic UUID（仅 RFCOMM 回退）",
+                    modifier = Modifier.padding(top = 10.dp, bottom = 4.dp),
+                    color = SecondaryColor,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Box {
+                    OutlinedButton(
+                        onClick = { onExpandedChange(true) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            if (selectedUuid == SPP_UUID) {
+                                "标准 SPP · $selectedUuid"
+                            } else {
+                                selectedUuid.toString()
+                            },
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Icon(
+                            Icons.Outlined.KeyboardArrowDown,
+                            contentDescription = "选择 Classic UUID",
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { onExpandedChange(false) },
+                    ) {
+                        choices.forEach { uuid ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            if (uuid == SPP_UUID) {
+                                                "标准 SPP UUID"
+                                            } else {
+                                                "设备服务 UUID"
+                                            },
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        Text(
+                                            uuid.toString(),
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                },
+                                onClick = { onSelect(uuid) },
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TextButton(
+                        onClick = onRefresh,
+                        enabled = !isBusy,
+                    ) {
+                        Text("刷新列表")
+                    }
+                    Button(
+                        onClick = onConnect,
+                        enabled = !isBusy,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(if (connectedStatus == null) "使用所选 UUID 连接" else "切换到所选 UUID")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommandInputRow(
+    value: String,
+    mode: ConsoleDisplayMode,
+    error: String?,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        if (mode == ConsoleDisplayMode.HEX) {
+                            "输入 HEX，例如 AA 55"
+                        } else {
+                            "输入指令…"
+                        },
+                    )
+                },
+                isError = error != null,
+            )
+            Button(
+                onClick = onSend,
+                enabled = enabled && value.isNotBlank(),
+            ) {
+                Text("发送")
+            }
+        }
+        error?.let {
+            Text(
+                it,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
