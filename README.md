@@ -44,7 +44,7 @@
 
 ## 构建
 
-准备 JDK 17 和 Android SDK API 36。`minSdk 26`，`compileSdk/targetSdk 36`。将 `JAVA_HOME` 指向本机 JDK 安装目录；使用 Android Studio 打开项目并配置 SDK，或设置 `ANDROID_HOME` 指向本机 Android SDK。也可以在项目根目录创建 `local.properties`，设置 `sdk.dir` 为本机 SDK 路径（Windows 路径建议使用 `/`）。此文件已被 Git 忽略，不应上传。
+准备 JDK 17 和 Android SDK API 36。`minSdk 26`，`compileSdk/targetSdk 36`。将 `JAVA_HOME` 指向本机 JDK 安装目录；使用 Android Studio 打开项目并配置 SDK，或设置 `ANDROID_HOME` 指向本机 Android SDK。也可以在项目根目录创建 `local.properties`，设置 `sdk.dir` 为本机 SDK 路径（Windows 示例：`sdk.dir=C\:/Users/YourName/AppData/Local/Android/Sdk`，使用 `/` 并转义盘符冒号）。此文件已被 Git 忽略，不应上传。
 
 先克隆项目并进入项目目录：
 
@@ -87,7 +87,7 @@ keyAlias=YOUR_KEY_ALIAS
 keyPassword=YOUR_KEY_PASSWORD
 ```
 
-将以上占位值替换为自己的配置，Windows 密钥路径同样建议使用 `/`。然后运行：
+将以上占位值替换为自己的配置，Windows 密钥路径同样使用 `/` 并转义盘符冒号，例如 `storeFile=C\:/keys/release.jks`。然后运行：
 
 ```powershell
 # Windows PowerShell
